@@ -17,6 +17,8 @@ import os
 import argparse
 import logging
 from os.path import join as ospj
+from pathlib import Path
+
 
 import diffusers
 import accelerate
@@ -49,7 +51,7 @@ logger = get_logger(__name__)
 
 
 class DreamStylerDataset(torch.utils.data.Dataset):
-    template = "A painting in the style of {}"
+    template = "A painting of {} in the style of {}"
 
     def __init__(
         self,
@@ -71,24 +73,30 @@ class DreamStylerDataset(torch.utils.data.Dataset):
         self.prob_flip = prob_flip
         self.repeats = repeats if is_train else 1
         self.num_stages = num_stages
+        
+        self.iter_index=0
 
         if not isinstance(self.placeholder_tokens, list):
             self.placeholder_tokens = [self.placeholder_token]
 
         self.flip = torchvision.transforms.RandomHorizontalFlip(p=self.prob_flip)
-
         self.image_path = image_path
+        self.image_path_list=list(Path(image_path).iterdir())
         self.prompt = self.template if context_prompt is None else context_prompt
 
     def __getitem__(self, index):
-        image = Image.open(self.image_path).convert("RGB")
+
+        image_path=self.image_path_list[index%(len(self.image_path_list))]
+        image = Image.open(image_path).convert("RGB")
         image = np.array(image).astype(np.uint8)
         prompt = self.prompt
-
         tokens = []
         for t in range(self.num_stages):
             placeholder_string = self.placeholder_tokens[t]
-            prompt_t = prompt.format(placeholder_string)
+            
+            filename = os.path.basename(image_path)
+            basename = os.path.splitext(filename)[0]
+            prompt_t = prompt.format(basename,placeholder_string)
 
             tokens.append(
                 self.tokenizer(
@@ -115,10 +123,13 @@ class DreamStylerDataset(torch.utils.data.Dataset):
         image = (image / 127.5 - 1.0).astype(np.float32)
         image = torch.from_numpy(image).permute(2, 0, 1)
 
+
         return {
+            "index":index,
             "input_ids": tokens,
             "pixel_values": image,
         }
+
 
     def __len__(self):
         return self.repeats
@@ -685,7 +696,7 @@ def get_options():
     parser.add_argument(
         "--dataloader_num_workers",
         type=int,
-        default=1,
+        default=0,
         help=(
             "Number of subprocesses to use for data loading."
             " 0 means that the data will be loaded in the main process."
